@@ -7,191 +7,26 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment-with-locales.min.js"></script>
     <style>
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f4f7f6;
-            color: #333;
-            line-height: 1.6;
+            font-family: sans-serif;
         }
-
-        h1 {
-            color: #2c3e50;
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 2.5em;
-        }
-
-        /* Container for controls */
-        .controls-container {
-            background-color: #ffffff;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-            margin-bottom: 30px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            max-width: 800px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        label {
-            font-weight: bold;
-            margin-bottom: 5px;
-            display: block;
-            color: #555;
-        }
-
-        select,
-        input[type="file"] {
-            padding: 10px 12px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 1em;
-            width: calc(100% - 24px); /* Account for padding */
-            box-sizing: border-box;
-            transition: border-color 0.3s ease;
-        }
-
-        select:focus,
-        input[type="file"]:focus {
-            border-color: #007bff;
-            outline: none;
-        }
-
-        input[type="file"] {
-            background-color: #e9ecef;
-            cursor: pointer;
-        }
-
-        button {
-            background-color: #007bff;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: background-color 0.3s ease, transform 0.2s ease;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-            transform: translateY(-1px);
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        #tecnicosCheckboxes {
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #e2e6ea;
-            max-height: 250px; /* Limit height for scrollability */
-            overflow-y: auto;
-        }
-
-        #tecnicosCheckboxes label {
-            display: inline-block;
-            margin-right: 15px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            font-weight: normal; /* Override bold for individual labels */
-        }
-
-        #tecnicosCheckboxes input[type="checkbox"] {
-            margin-right: 5px;
-            cursor: pointer;
-        }
-
-        /* Output sections */
-        #output,
-        #horasPorDia,
-        #plot {
-            background-color: #ffffff;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-            margin-top: 30px;
-            max-width: 1200px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
         #output {
-            white-space: pre-wrap; /* Preserve formatting for text output */
-            font-family: 'Consolas', 'Monaco', monospace; /* Monospaced font for code-like output */
-            font-size: 0.95em;
-            background-color: #eef;
-            border: 1px dashed #cdd;
-            padding: 20px;
+            white-space: pre-wrap;
         }
-
-        /* Table styling */
         .tabla-horas {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 20px;
-            font-size: 0.9em;
+            margin-top: 10px;
         }
-
-        .tabla-horas th,
-        .tabla-horas td {
-            border: 1px solid #dee2e6;
-            padding: 12px;
+        .tabla-horas th, .tabla-horas td {
+            border: 1px solid #ddd;
+            padding: 8px;
             text-align: left;
         }
-
         .tabla-horas th {
-            background-color: #e9ecef;
-            color: #495057;
-            font-weight: bold;
-            position: sticky;
-            top: 0; /* Makes header stick when scrolling */
-            z-index: 1;
-        }
-
-        .tabla-horas tbody tr:nth-child(even) {
-            background-color: #f8f9fa; /* Zebra striping */
-        }
-
-        .tabla-horas tbody tr:hover {
-            background-color: #e2f0fb;
-            cursor: pointer;
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-
-            .controls-container,
-            #output,
-            #horasPorDia,
-            #plot {
-                padding: 15px;
-                margin-top: 20px;
-            }
-
-            select,
-            input[type="file"],
-            button {
-                width: 100%;
-                margin-bottom: 10px;
-            }
-
-            #tecnicosCheckboxes label {
-                margin-right: 10px;
-            }
+            background-color: #f2f2f2;
         }
     </style>
 </head>
-<body>
 <body>
     <h1>Inspecciones Monofásicas y Trifásicas</h1>
     <select id="tipoInspeccion">
