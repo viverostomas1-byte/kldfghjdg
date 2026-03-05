@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Inspecciones Monofásicas y Trifásicas</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment-with-locales.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+        #output {
+            white-space: pre-wrap;
+        }
+        .tabla-horas {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .tabla-horas th, .tabla-horas td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .tabla-horas th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Inspecciones Monofásicas y Trifásicas</h1>
+    <select id="tipoInspeccion">
+        <option value="monofasica">Inspección Monofásica</option>
+        <option value="trifasica">Inspección Trifásica</option>
+    </select><br><br>
+    <label for="fileInput">Inspecciones:</label>
+    <input type="file" id="fileInput" accept=".xlsx" required><br><br>
+    <label for="fileClientesInput">Base de Datos:</label>
+    <input type="file" id="fileClientesInput" accept=".xlsx" required><br><br>
+
+    <div id="tecnicosCheckboxes">
+        <button id="selectAllTecnicos">Seleccionar Todos los Técnicos</button><br><br>
+        </div>
+
+    <div id="output"></div>
+    <div id="horasPorDia"></div>
+    <div id="plot"></div>
+
+    <script>
+        const tipoInspeccion = document.getElementById('tipoInspeccion');
+        const fileInput = document.getElementById('fileInput');
+        const fileClientesInput = document.getElementById('fileClientesInput');
+        const tecnicosCheckboxesDiv = document.getElementById('tecnicosCheckboxes');
+        const outputDiv = document.getElementById('output');
+        const horasPorDiaDiv = document.getElementById('horasPorDia');
+        const plotDiv = document.getElementById('plot');
+        let df;
+        let df_clientes;
+
+        fileInput.addEventListener('change', handleFile);
+        fileClientesInput.addEventListener('change', handleClientesFile);
+
+        function handleFile(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                df = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+                actualizarTecnicos();
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function handleClientesFile(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                df_clientes = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+                // **Llamada a mostrarResumen ELIMINADA de handleClientesFile()**
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function actualizarTecnicos() {
+            if (!df) return;
+            const tecnicos = [...new Set(df.map(item => item['ID de usuario técnico']))];
+            tecnicosCheckboxesDiv.innerHTML = `<button id="selectAllTecnicos">Seleccionar Todos los Técnicos</button><br><br>`;
+            const selectAllButton = document.getElementById('selectAllTecnicos');
+
+            tecnicos.forEach(tecnico => {
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = tecnico;
+                checkbox.id = `tecnico-${tecnico}`;
+                checkbox.addEventListener('change', mostrarResumen); // Actualizar al cambiar checkbox
+
+                const label = document.createElement('label');
+                label.htmlFor = `tecnico-${tecnico}`;
+                label.textContent = tecnico;
+
+                tecnicosCheckboxesDiv.appendChild(checkbox);
+                tecnicosCheckboxesDiv.appendChild(label);
+                tecnicosCheckboxesDiv.appendChild(document.createElement('br'));
+            });
+
+            selectAllButton.addEventListener('click', function() {
+                const checkboxes = tecnicosCheckboxesDiv.querySelectorAll('input[type="checkbox"]');
+                checkboxes.forEach(checkbox => {
+                    checkbox.checked = !checkbox.checked;
+                });
+                mostrarResumen(); // Actualizar resumen después de seleccionar/deseleccionar todos
+            });
+        }
+
+        function mostrarResumen() {
+            // **Condición al inicio de mostrarResumen() para evitar ejecución sin datos (se mantiene)**
+            if (!df || !df_clientes) {
+                outputDiv.innerText = "";
+                horasPorDiaDiv.innerHTML = "";
+                plotDiv.innerHTML = "";
+                return; // Salimos si no hay datos
+            }
+
+            const tecnicoCheckboxes = Array.from(tecnicosCheckboxesDiv.querySelectorAll('input[type="checkbox"]:checked'));
+            const tecnicosSeleccionados = tecnicoCheckboxes.map(checkbox => checkbox.value);
+
+            let datosResumen;
+            let mostrarInfoDetallada = true;
+
+            if (tecnicosSeleccionados.length === 0) {
+                datosResumen = df; // Si no se selecciona ningún técnico, muestra todos (este comportamiento se mantiene por ahora, si se desea cambiar a "no mostrar nada" cuando no hay selección, se puede modificar aquí)
+            } else {
+                datosResumen = df.filter(item => tecnicosSeleccionados.includes(item['ID de usuario técnico']));
+                if (tecnicosSeleccionados.length > 0) {
+                    mostrarInfoDetallada = tecnicosSeleccionados.length <= 1;
+                }
+            }
+
+
+            if (datosResumen.length === 0) {
+                outputDiv.innerText = `No se encontraron datos para los técnicos seleccionados.`;
+                horasPorDiaDiv.innerHTML = "";
+                plotDiv.innerHTML = "";
+                return;
+            }
+
+            if (tipoInspeccion.value === "monofasica") {
+                mostrarResumenMonofasico(datosResumen, mostrarInfoDetallada, tecnicosSeleccionados); // Pasar tecnicosSeleccionados
+            } else {
+                mostrarResumenTrifasico(datosResumen, mostrarInfoDetallada, tecnicosSeleccionados); // Pasar tecnicosSeleccionados
+            }
+        }
+
+function mostrarResumenMonofasico(datosResumen, mostrarInfoDetallada, tecnicosSeleccionados) {
+    // --- Constantes y variables iniciales ---
+    const HORAS_LABORALES_DIA = 8.5;
+    const fechasUnicas = [...new Set(datosResumen.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0]))]
+        .map(fecha => moment(fecha, 'DD/MM/YYYY'))
+        .sort((a, b) => a - b)
+        .map(fecha => fecha.format('DD/MM/YYYY'));
+
+    let tiempoEfectivoTotal = 0;
+    let accionesTotales = 0;
+    let totalNormales = 0;
+    let totalVisitas = 0;
+    let totalSubregistros = 0;
+
+    let tiempoTotalNormales = 0;
+    let tiempoTotalVisitas = 0;
+    let tiempoTotalSubregistros = 0;
+
+    let tablaHTML = "";
+
+    let totalLapsoMasLargoMinutos = 0;
+
+    // ---  CÁLCULO DE TIPOS DE PROCEDENCIAS (MODIFICADO)  ---
+    // Filtrar datosResumen para incluir solo 'Normal' y 'Sub-Registro'
+    const datosResumenFiltrado = datosResumen.filter(item => {
+        const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+        return estadoInspeccion === "Normal" || estadoInspeccion === "Sub-Registro";
+    });
+
+    const procedenciaResumen = {}; // Objeto para almacenar el resumen por procedencia
+
+    datosResumen.forEach(item => { // Iterar sobre datosResumen original para obtener el total de procedencias
+        const procedencia = item['Procedencia'] || "Sin Informacion";
+        const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+
+        if (!procedenciaResumen[procedencia]) {
+            procedenciaResumen[procedencia] = {
+                normales: 0,
+                visitas: 0,
+                subregistros: 0,
+                total: 0,
+                totalProcedencia: 0 // Total de la procedencia incluyendo visitas
+            };
+        }
+        procedenciaResumen[procedencia].totalProcedencia++; // Incrementar total de procedencia para todos los tipos
+
+        if (estadoInspeccion === "Normal") {
+            procedenciaResumen[procedencia].normales++;
+        } else if (estadoInspeccion === "Visitas") {
+            procedenciaResumen[procedencia].visitas++;
+        } else if (estadoInspeccion === "Sub-Registro") {
+            procedenciaResumen[procedencia].subregistros++;
+        }
+
+    });
+
+    // Calcular el total (normales + subregistros) para efectividad después de procesar todos los items
+    for (const procedencia in procedenciaResumen) {
+        procedenciaResumen[procedencia].total = procedenciaResumen[procedencia].normales + procedenciaResumen[procedencia].subregistros;
+    }
+
+
+    // --- FIN DE CÁLCULO DE PROCEDENCIAS (MODIFICADO) ---
+
+
+    // --- Información Detallada (Tabla) ---
+    if (mostrarInfoDetallada) {
+        tablaHTML = `<table class="tabla-horas"><thead><tr><th>Fecha</th><th>Día</th><th>Hora Inicio</th><th>Comuna Inicio</th><th>Hora Fin</th><th>Comuna Fin</th><th>% Día</th><th>Normales</th><th>Visitas</th><th>Sub-Registros</th><th>Efectividad</th><th>Lapso más largo</th><th>Inicio Lapso</th><th>Fin Lapso</th></tr></thead><tbody>`;
+
+        fechasUnicas.forEach(fecha => {
+            const trabajosDelDia = datosResumen.filter(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0] === fecha);
+
+            let horasInicio = trabajosDelDia.map(item => {
+                const partesFechaInicio = item['Fecha y hora realizadas (Iniciado)']?.split(' ');
+                return partesFechaInicio && partesFechaInicio.length > 1 ? partesFechaInicio[1] : null;
+            }).filter(hora => hora !== undefined && hora !== null).sort();
+
+            let horasFin = trabajosDelDia.map(item => {
+                const partesFechaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ');
+                return partesFechaFin && partesFechaFin.length > 1 ? partesFechaFin[1] : null;
+            }).filter(hora => hora !== undefined && hora !== null).sort();
+
+            let clienteInicio = trabajosDelDia.find(item => {
+                const partesFechaInicio = item['Fecha y hora realizadas (Iniciado)']?.split(' ');
+                return partesFechaInicio && partesFechaInicio.length > 1 && partesFechaInicio[1] === horasInicio[0];
+            })?.['Mi identificación de cliente'];
+
+            let clienteFin = trabajosDelDia.find(item => {
+                const partesFechaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ');
+                return partesFechaFin && partesFechaFin.length > 1 && partesFechaFin[1] === horasFin[horasFin.length - 1];
+            })?.['Mi identificación de cliente'];
+
+
+            const comunaInicio = obtenerComuna(clienteInicio);
+            const comunaFin = obtenerComuna(clienteFin);
+
+            let normalesDia = 0;
+            let visitasDia = 0;
+            let subregistrosDia = 0;
+            let tiempoEfectivoHoras = 0;
+
+
+            trabajosDelDia.forEach(item => {
+                const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+                const horaInicio = item['Fecha y hora realizadas (Iniciado)'].split(' ')[1];
+                const horaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ')[1];
+
+                if (!horaInicio || !horaFin) return;
+
+                const minutosInicio = convertirHoraAMinutos(horaInicio);
+                const minutosFin = convertirHoraAMinutos(horaFin);
+                const duracionMinutos = minutosFin - minutosInicio;
+                const duracionHoras = duracionMinutos / 60;
+
+                if (estadoInspeccion === "Normal") {
+                    normalesDia++;
+                    tiempoTotalNormales += duracionHoras;
+                } else if (estadoInspeccion === "Visitas") {
+                    visitasDia++;
+                    tiempoTotalVisitas += duracionHoras;
+                } else if (estadoInspeccion === "Sub-Registro") {
+                    subregistrosDia++;
+                    tiempoTotalSubregistros += duracionHoras;
+                }
+                tiempoEfectivoHoras += duracionHoras;
+            });
+
+            totalNormales += normalesDia;
+            totalVisitas += visitasDia;
+            totalSubregistros += subregistrosDia;
+
+            const porcentajeTrabajo = (tiempoEfectivoHoras / HORAS_LABORALES_DIA) * 100;
+            tiempoEfectivoTotal += tiempoEfectivoHoras;
+            accionesTotales += trabajosDelDia.length;
+
+            let lapsoMasLargoMinutos = 0;
+            let inicioLapso = null;
+            let finLapso = null;
+
+            if (horasFin.length > 0 && horasInicio.length > 0 && horasFin.length === horasInicio.length) {
+                for (let i = 0; i < horasFin.length - 1; i++) {
+                    const horaFinActual = horasFin[i];
+                    const horaInicioSiguiente = horasInicio[i + 1];
+
+                    if (!horaFinActual || !horaInicioSiguiente) continue;
+
+                    const minutosFin = convertirHoraAMinutos(horaFinActual);
+                    const minutosInicioSiguiente = convertirHoraAMinutos(horaInicioSiguiente);
+                    const lapso = minutosInicioSiguiente - minutosFin;
+
+                    if (lapso > lapsoMasLargoMinutos) {
+                        lapsoMasLargoMinutos = lapso;
+                        inicioLapso = horaFinActual;
+                        finLapso = horaInicioSiguiente;
+                    }
+                }
+            }
+
+            const lapsoMasLargoHoras = Math.floor(lapsoMasLargoMinutos / 60);
+            const lapsoMasLargoMinutosRestantes = lapsoMasLargoMinutos % 60;
+            const lapsoMasLargoFormateado = `${lapsoMasLargoHoras} horas y ${lapsoMasLargoMinutosRestantes} minutos`;
+
+            totalLapsoMasLargoMinutos += lapsoMasLargoMinutos;
+
+            moment.locale('es');
+            const fechaMoment = moment(fecha, 'DD-MM-YYYY');
+            const diaSemana = fechaMoment.format('dddd');
+
+            // Calcular la efectividad diaria
+            const efectividadDiaCalculada = (normalesDia + subregistrosDia) > 0 ? (subregistrosDia / (normalesDia + subregistrosDia)) * 100 : 0;
+            const efectividadDia = efectividadDiaCalculada.toFixed(2) + "%";
+
+
+            tablaHTML += `<tr><td>${fecha}</td><td>${diaSemana}</td><td>${horasInicio.length > 0 ? horasInicio[0] : "Sin datos"}</td><td>${comunaInicio}</td><td>${horasFin.length > 0 ? horasFin[horasFin.length - 1] : "Sin datos"}</td><td>${comunaFin}</td><td>${porcentajeTrabajo.toFixed(2)}%</td><td>${normalesDia}</td><td>${visitasDia}</td><td>${subregistrosDia}</td><td>${efectividadDia}</td>
+<td>${lapsoMasLargoFormateado}</td><td>${inicioLapso}</td><td>${finLapso}</td></tr>`;
+        });
+        tablaHTML += "</tbody></table>";
+        horasPorDiaDiv.innerHTML = tablaHTML;
+    } else {
+        horasPorDiaDiv.innerHTML = "";
+
+        datosResumen.forEach(item => {
+            const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+            if (estadoInspeccion === "Normal") totalNormales++;
+            else if (estadoInspeccion === "Visitas") totalVisitas++;
+            else if (estadoInspeccion === "Sub-Registro") totalSubregistros++;
+
+            accionesTotales++;
+        });
+    }
+
+    const totalInspecciones = totalNormales + totalVisitas + totalSubregistros;
+    const porcentajeNormales = (totalInspecciones > 0) ? (totalNormales / totalInspecciones) * 100 : 0;
+    const porcentajeVisitas = (totalInspecciones > 0) ? (totalVisitas / totalInspecciones) * 100 : 0;
+    const porcentajeSubregistros = (totalInspecciones > 0) ? (totalSubregistros / totalInspecciones) * 100 : 0;
+    const porcentajeEfectividad = ((totalNormales + totalSubregistros) > 0) ? (totalSubregistros / (totalNormales + totalSubregistros)) * 100 : 0;
+
+    // Calculamos Productividad Acumulada aquí
+    let accionesPorDia;
+    if (tecnicosSeleccionados && tecnicosSeleccionados.length > 0) {
+        let productividadesTecnicos = [];
+        tecnicosSeleccionados.forEach(tecnico => {
+            const datosTecnico = df.filter(item => item['ID de usuario técnico'] === tecnico);
+            if (datosTecnico.length > 0) {
+                const fechasUnicasTecnico = [...new Set(datosTecnico.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0]))];
+                const numDiasTecnico = fechasUnicasTecnico.length;
+                let totalNormalesTecnico = 0;
+                let totalSubregistrosTecnico = 0;
+                datosTecnico.forEach(item => {
+                    const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+                    if (estadoInspeccion === "Normal") totalNormalesTecnico++;
+                    else if (estadoInspeccion === "Sub-Registro") totalSubregistrosTecnico++;
+                });
+                const accionesPorDiaTecnico = numDiasTecnico > 0 ? (totalNormalesTecnico + totalSubregistrosTecnico) / numDiasTecnico : 0;
+                productividadesTecnicos.push(accionesPorDiaTecnico);
+            }
+        });
+        accionesPorDia = productividadesTecnicos.length > 0 ? productividadesTecnicos.reduce((a, b) => a + b, 0) / productividadesTecnicos.length : 0;
+    } else {
+        accionesPorDia = fechasUnicas.length > 0  ? (totalNormales + totalSubregistros) / fechasUnicas.length : 0;
+    }
+
+    // Calcular el tiempo promedio de cada tipo de inspección
+    const tiempoPromedioNormales = (mostrarInfoDetallada && totalNormales > 0) ? (tiempoTotalNormales / totalNormales).toFixed(2) : 0;
+    const tiempoPromedioVisitas = (mostrarInfoDetallada && totalVisitas > 0) ? (tiempoTotalVisitas / totalVisitas).toFixed(2) : 0;
+    const tiempoPromedioSubregistros = (mostrarInfoDetallada && totalSubregistros > 0) ? (tiempoTotalSubregistros / totalSubregistros).toFixed(2) : 0;
+
+    // Calcular el promedio de "Lapso más largo"
+    const promedioLapsoMasLargoMinutos = fechasUnicas.length > 0 ? totalLapsoMasLargoMinutos / fechasUnicas.length : 0;
+    const promedioLapsoMasLargoHoras = Math.floor(promedioLapsoMasLargoMinutos / 60);
+    const promedioLapsoMasLargoMinutosRestantes = Math.round(promedioLapsoMasLargoMinutos % 60);
+    const promedioLapsoMasLargoFormateado = `${promedioLapsoMasLargoHoras} horas y ${promedioLapsoMasLargoMinutosRestantes} minutos`;
+
+    // Resumen condicional basado en mostrarInfoDetallada
+    let resumenHTML = `Fecha de inicio del análisis: ${fechasUnicas[0] || 'Sin datos'}
+Fecha de fin del análisis: ${fechasUnicas[fechasUnicas.length - 1] || 'Sin datos'}\n
+Número de días trabajados: ${fechasUnicas.length}
+Total de acciones realizadas: ${accionesTotales}\n`;
+
+    // ---  RE-INCORPORANDO SECCIÓN DE TIPOS DE PROCEDENCIAS EN RESUMEN (MODIFICADO) ---
+    resumenHTML += "\nTipos de procedencia:\n";
+    for (const tipo in procedenciaResumen) {
+        const procedenciaData = procedenciaResumen[tipo];
+        const efectividadProcedencia = procedenciaData.total > 0 ? (procedenciaData.subregistros / procedenciaData.total) : 0;
+        resumenHTML += `${tipo}: ${procedenciaData.totalProcedencia} (Visitas: ${procedenciaData.visitas} | Normales: ${procedenciaData.normales} | Sub-Registros: ${procedenciaData.subregistros}) Efectividad: ${(efectividadProcedencia * 100).toFixed(2)}%\n`;
+    }
+    // --- FIN DE RE-INCORPORACIÓN DE SECCIÓN DE PROCEDENCIAS EN RESUMEN (MODIFICADO) ---
+
+
+    resumenHTML += `\nTipos de inspecciones:
+Normales: ${totalNormales} (${porcentajeNormales.toFixed(2)}%)
+Visitas: ${totalVisitas} (${porcentajeVisitas.toFixed(2)}%)
+Sub-Registros: ${totalSubregistros} (${porcentajeSubregistros.toFixed(2)}%)\n
+Efectividad: ${porcentajeEfectividad.toFixed(2)}%
+${mostrarInfoDetallada ? `\nTiempo efectivo de trabajo: ${Math.floor(tiempoEfectivoTotal)} horas y ${Math.round((tiempoEfectivoTotal % 1) * 60)} minutos
+Porcentaje de trabajo: ${((tiempoEfectivoTotal / (fechasUnicas.length * HORAS_LABORALES_DIA)) * 100).toFixed(2)}%` : ''}\n
+Productividad diaria promedio: ${accionesPorDia.toFixed(2)}
+${mostrarInfoDetallada ? `\Acciones proyectadas: ${(14 * fechasUnicas.length)}
+Acciones realizadas: ${(totalNormales + totalSubregistros)}
+Porcentaje de acciones realizadas: ${(((totalNormales + totalSubregistros)/(14 * fechasUnicas.length))*100).toFixed(2)}%` : ''}
+${mostrarInfoDetallada ? `\nTiempo promedio por tipo de inspección:
+Normales: ${Math.floor(tiempoPromedioNormales)} horas y ${Math.round((tiempoPromedioNormales % 1) * 60)} minutos
+Visitas: ${Math.floor(tiempoPromedioVisitas)} horas y ${Math.round((tiempoPromedioVisitas % 1) * 60)} minutos
+Sub-Registros: ${Math.floor(tiempoPromedioSubregistros)} horas y ${Math.round((tiempoPromedioSubregistros % 1) * 60)} minutos` : ''}
+${mostrarInfoDetallada ? `\nPromedio lapso mas largo: ${promedioLapsoMasLargoFormateado}` : ''}`;
+
+    outputDiv.innerText = resumenHTML;
+}
+
+function ajustarInicioLapso(inicioLapso, trabajosDelDia) {
+    const trabajoInicioLapso = trabajosDelDia.find(trabajo => moment(trabajo['Fecha y hora realizadas (Iniciado)'], 'DD/MM/YYYY HH:mm:ss').format('HH:mm:ss') === inicioLapso);
+    if (!trabajoInicioLapso) return "Sin datos";
+    const [hDurAnt, mDurAnt] = (trabajoInicioLapso['Duración finalizada'] || "00:00:00").split(':').map(Number);
+    const duracionAnteriorMinutos = hDurAnt * 60 + mDurAnt;
+    const [hIniAnt, mIniAnt] = inicioLapso.split(':').map(Number);
+    const minutosInicioAnterior = hIniAnt * 60 + mIniAnt;
+
+    const inicioLapsoAjustadoMinutos = minutosInicioAnterior + duracionAnteriorMinutos;
+    const inicioLapsoAjustadoHoras = Math.floor(inicioLapsoAjustadoMinutos / 60);
+    const inicioLapsoAjustadoMinutosRestantes = inicioLapsoAjustadoMinutos % 60;
+    return `${inicioLapsoAjustadoHoras.toString().padStart(2, '0')}:${inicioLapsoAjustadoMinutosRestantes.toString().padStart(2, '0')}`;
+}
+
+
+function convertirHoraAMinutos(hora) {
+    const [horas, minutos, segundos] = hora.split(':').map(Number);
+    return horas * 60 + minutos;
+}
+
+function mostrarResumenTrifasico(datosResumen, mostrarInfoDetallada, tecnicosSeleccionados) {
+    // --- Constantes y variables iniciales ---
+    const HORAS_LABORALES_DIA = 8.5; // Define las horas laborales por día como constante para mayor claridad
+    const fechasUnicas = [...new Set(datosResumen.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0]))]
+        .map(fecha => moment(fecha, 'DD/MM/YYYY'))
+        .sort((a, b) => a - b)
+        .map(fecha => fecha.format('DD/MM/YYYY'));
+
+    let tiempoEfectivoTotal = 0;
+    let accionesTotales = 0;
+    let totalNormales = 0;
+    let totalVisitas = 0;
+    let totalSubregistros = 0;
+
+    // Variables para acumular el tiempo de cada tipo de inspección
+    let tiempoTotalNormales = 0;
+    let tiempoTotalVisitas = 0;
+    let tiempoTotalSubregistros = 0;
+
+    let tablaHTML = ""; // Inicializar tablaHTML fuera del bloque if para evitar problemas de scope
+
+    // Variable para acumular el lapso más largo total en minutos
+    let totalLapsoMasLargoMinutos = 0;
+
+
+    // --- Información Detallada (Tabla) ---
+    if (mostrarInfoDetallada) {
+        tablaHTML = `<table class="tabla-horas"><thead><tr><th>Fecha</th><th>Día</th><th>Hora Inicio</th><th>Comuna Inicio</th><th>Hora Fin</th><th>Comuna Fin</th><th>% Día</th><th>Normales</th><th>Visitas</th><th>Sub-Registros</th><th>Efectividad</th><th>Lapso más largo</th><th>Inicio Lapso</th><th>Fin Lapso</th></tr></thead><tbody>`;
+
+        fechasUnicas.forEach(fecha => {
+            const trabajosDelDia = datosResumen.filter(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0] === fecha);
+
+            // --- Extraer y ordenar horas de inicio y fin ---
+            const horasInicio = trabajosDelDia.map(item => {
+                const partesFechaInicio = item['Fecha y hora realizadas (Iniciado)']?.split(' ');
+                return partesFechaInicio && partesFechaInicio.length > 1 ? partesFechaInicio[1] : null;
+            }).filter(hora => hora !== undefined && hora !== null).sort();
+
+            const horasFin = trabajosDelDia.map(item => {
+                const partesFechaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ');
+                return partesFechaFin && partesFechaFin.length > 1 ? partesFechaFin[1] : null;
+            }).filter(hora => hora !== undefined && hora !== null).sort();
+
+
+            // --- Obtener comuna de inicio y fin ---
+            const clienteInicio = trabajosDelDia.find(item => {
+                const partesFechaInicio = item['Fecha y hora realizadas (Iniciado)']?.split(' ');
+                return partesFechaInicio && partesFechaInicio.length > 1 && partesFechaInicio[1] === horasInicio[0];
+            })?.['Mi identificación de cliente'];
+
+            const clienteFin = trabajosDelDia.find(item => {
+                const partesFechaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ');
+                return partesFechaFin && partesFechaFin.length > 1 && partesFechaFin[1] === horasFin[horasFin.length - 1];
+            })?.['Mi identificación de cliente'];
+
+
+            const comunaInicio = obtenerComuna(clienteInicio); // Asume que obtenerComuna está definida en otro lugar
+            const comunaFin = obtenerComuna(clienteFin);     // Asume que obtenerComuna está definida en otro lugar
+
+
+            let normalesDia = 0;
+            let visitasDia = 0;
+            let subregistrosDia = 0;
+            let tiempoEfectivoHoras = 0;
+
+
+            trabajosDelDia.forEach(item => {
+                const estadoInspeccion = item['Inspeccion 3F>Estado Inspeccion'] || "Visitas";
+                const horaInicio = item['Fecha y hora realizadas (Iniciado)'].split(' ')[1];
+                const horaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ')[1];
+
+                if (!horaInicio || !horaFin) return; // Salta la iteración si falta hora de inicio o fin
+
+
+                const minutosInicio = convertirHoraAMinutos(horaInicio); // Asume que convertirHoraAMinutos está definida en otro lugar
+                const minutosFin = convertirHoraAMinutos(horaFin);      // Asume que convertirHoraAMinutos está definida en otro lugar
+                const duracionMinutos = minutosFin - minutosInicio;
+                const duracionHoras = duracionMinutos / 60;
+
+
+                if (estadoInspeccion === "Normal") {
+                    normalesDia++;
+                    tiempoTotalNormales += duracionHoras;
+                } else if (estadoInspeccion === "Visitas") {
+                    visitasDia++;
+                    tiempoTotalVisitas += duracionHoras;
+                } else if (estadoInspeccion === "Sub-Registro") {
+                    subregistrosDia++;
+                    tiempoTotalSubregistros += duracionHoras;
+                }
+                tiempoEfectivoHoras += duracionHoras;
+            });
+
+            totalNormales += normalesDia;
+            totalVisitas += visitasDia;
+            totalSubregistros += subregistrosDia;
+
+            const porcentajeTrabajo = (tiempoEfectivoHoras / HORAS_LABORALES_DIA) * 100;
+            tiempoEfectivoTotal += tiempoEfectivoHoras;
+            accionesTotales += trabajosDelDia.length;
+
+            let lapsoMasLargoMinutos = 0;
+            let inicioLapso = null;
+            let finLapso = null;
+
+            if (horasFin.length > 0 && horasInicio.length > 0 && horasFin.length === horasInicio.length) {
+                for (let i = 0; i < horasFin.length - 1; i++) {
+                    const horaFinActual = horasFin[i];
+                    const horaInicioSiguiente = horasInicio[i + 1];
+
+                    if (!horaFinActual || !horaInicioSiguiente) continue;
+
+                    const minutosFin = convertirHoraAMinutos(horaFinActual);
+                    const minutosInicioSiguiente = convertirHoraAMinutos(horaInicioSiguiente);
+                    const lapso = minutosInicioSiguiente - minutosFin;
+
+                    if (lapso > lapsoMasLargoMinutos) {
+                        lapsoMasLargoMinutos = lapso;
+                        inicioLapso = horaFinActual;
+                        finLapso = horaInicioSiguiente;
+                    }
+                }
+            }
+
+            const lapsoMasLargoHoras = Math.floor(lapsoMasLargoMinutos / 60);
+            const lapsoMasLargoMinutosRestantes = lapsoMasLargoMinutos % 60;
+            const lapsoMasLargoFormateado = `${lapsoMasLargoHoras} horas y ${lapsoMasLargoMinutosRestantes} minutos`;
+
+            // Acumular el lapso más largo del día para calcular el promedio al final
+            totalLapsoMasLargoMinutos += lapsoMasLargoMinutos;
+
+            moment.locale('es');
+            const fechaMoment = moment(fecha, 'DD-MM-YYYY'); // Usa el formato correcto 'DD-MM-YYYY'
+            const diaSemana = fechaMoment.format('dddd');
+
+            // Calcular la efectividad diaria
+            const efectividadDiaCalculada = (normalesDia + subregistrosDia) > 0 ? (subregistrosDia / (normalesDia + subregistrosDia)) * 100 : 0;
+            const efectividadDia = efectividadDiaCalculada.toFixed(2) + "%";
+
+
+            tablaHTML += `<tr><td>${fecha}</td><td>${diaSemana}</td><td>${horasInicio.length > 0 ? horasInicio[0] : "Sin datos"}</td><td>${comunaInicio}</td><td>${horasFin.length > 0 ? horasFin[horasFin.length - 1] : "Sin datos"}</td><td>${comunaFin}</td><td>${porcentajeTrabajo.toFixed(2)}%</td><td>${normalesDia}</td><td>${visitasDia}</td><td>${subregistrosDia}</td><td>${efectividadDia}</td>
+<td>${lapsoMasLargoFormateado}</td><td>${inicioLapso}</td><td>${finLapso}</td></tr>`;
+        });
+        tablaHTML += "</tbody></table>";
+        horasPorDiaDiv.innerHTML = tablaHTML; // Mostrar la tabla solo si mostrarInfoDetallada es true
+    } else {
+        // Limpiar la tabla si no se muestra info detallada
+        horasPorDiaDiv.innerHTML = "";
+
+        // Solo contar las acciones sin calcular tiempos ni mostrar la tabla
+        datosResumen.forEach(item => {
+            const estadoInspeccion = item['Inspeccion 3F>Estado Inspeccion'] || "Visitas";
+            if (estadoInspeccion === "Normal") totalNormales++;
+            else if (estadoInspeccion === "Visitas") totalVisitas++;
+            else if (estadoInspeccion === "Sub-Registro") totalSubregistros++;
+
+            accionesTotales++;
+        });
+    }
+
+    const totalInspecciones = totalNormales + totalVisitas + totalSubregistros;
+    const porcentajeNormales = (totalInspecciones > 0) ? (totalNormales / totalInspecciones) * 100 : 0; // Evitar división por cero
+    const porcentajeVisitas = (totalInspecciones > 0) ? (totalVisitas / totalInspecciones) * 100 : 0;    // Evitar división por cero
+    const porcentajeSubregistros = (totalInspecciones > 0) ? (totalSubregistros / totalInspecciones) * 100 : 0; // Evitar división por cero
+    const porcentajeEfectividad = ((totalNormales + totalSubregistros) > 0) ? (totalSubregistros / (totalNormales + totalSubregistros)) * 100 : 0; // Evitar división por cero
+
+    // Calculamos Productividad Acumulada aquí
+    let accionesPorDia;
+    if (tecnicosSeleccionados && tecnicosSeleccionados.length > 0) { // Corregir la condición a  `> 0` para permitir un técnico seleccionado
+        let productividadesTecnicos = [];
+        tecnicosSeleccionados.forEach(tecnico => {
+            const datosTecnico = df.filter(item => item['ID de usuario técnico'] === tecnico);
+            if (datosTecnico.length > 0) { // Asegurarse de que haya datos para el técnico
+                const fechasUnicasTecnico = [...new Set(datosTecnico.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0]))];
+                const numDiasTecnico = fechasUnicasTecnico.length;
+                let totalNormalesTecnico = 0;
+                let totalSubregistrosTecnico = 0;
+                datosTecnico.forEach(item => {
+                    const estadoInspeccion = item['Inspeccion 3F>Estado Inspeccion'] || "Visitas";
+                    if (estadoInspeccion === "Normal") totalNormalesTecnico++;
+                    else if (estadoInspeccion === "Sub-Registro") totalSubregistrosTecnico++;
+                });
+                const accionesPorDiaTecnico = numDiasTecnico > 0 ? (totalNormalesTecnico + totalSubregistrosTecnico) / numDiasTecnico : 0; // Evitar division por cero
+                productividadesTecnicos.push(accionesPorDiaTecnico);
+            }
+        });
+        accionesPorDia = productividadesTecnicos.length > 0 ? productividadesTecnicos.reduce((a, b) => a + b, 0) / productividadesTecnicos.length : 0; // Evitar división por cero si no hay técnicos seleccionados con datos
+    } else {
+        accionesPorDia = fechasUnicas.length > 0  ? (totalNormales + totalSubregistros) / fechasUnicas.length : 0; // Evitar división por cero si no hay fechas únicas
+    }
+
+    // Calcular el tiempo promedio de cada tipo de inspección (solo si mostrarInfoDetallada es true)
+    const tiempoPromedioNormales = (mostrarInfoDetallada && totalNormales > 0) ? (tiempoTotalNormales / totalNormales).toFixed(2) : 0;
+    const tiempoPromedioVisitas = (mostrarInfoDetallada && totalVisitas > 0) ? (tiempoTotalVisitas / totalVisitas).toFixed(2) : 0;
+    const tiempoPromedioSubregistros = (mostrarInfoDetallada && totalSubregistros > 0) ? (tiempoTotalSubregistros / totalSubregistros).toFixed(2) : 0;
+
+    // Calcular el promedio de "Lapso más largo"
+    const promedioLapsoMasLargoMinutos = fechasUnicas.length > 0 ? totalLapsoMasLargoMinutos / fechasUnicas.length : 0;
+    const promedioLapsoMasLargoHoras = Math.floor(promedioLapsoMasLargoMinutos / 60);
+    const promedioLapsoMasLargoMinutosRestantes = Math.round(promedioLapsoMasLargoMinutos % 60); // Redondear a minutos enteros
+    const promedioLapsoMasLargoFormateado = `${promedioLapsoMasLargoHoras} horas y ${promedioLapsoMasLargoMinutosRestantes} minutos`;
+
+    // Resumen condicional basado en mostrarInfoDetallada
+    const resumenHTML = `Fecha de inicio del análisis: ${fechasUnicas[0] || 'Sin datos'}
+Fecha de fin del análisis: ${fechasUnicas[fechasUnicas.length - 1] || 'Sin datos'}\n
+Número de días trabajados: ${fechasUnicas.length}
+Total de acciones realizadas: ${accionesTotales}\n
+Tipos de inspecciones:
+Normales: ${totalNormales} (${porcentajeNormales.toFixed(2)}%)
+Visitas: ${totalVisitas} (${porcentajeVisitas.toFixed(2)}%)
+Sub-Registros: ${totalSubregistros} (${porcentajeSubregistros.toFixed(2)}%)\n
+Efectividad: ${porcentajeEfectividad.toFixed(2)}%
+${mostrarInfoDetallada ? `\nTiempo efectivo de trabajo: ${Math.floor(tiempoEfectivoTotal)} horas y ${Math.round((tiempoEfectivoTotal % 1) * 60)} minutos
+Porcentaje de trabajo: ${((tiempoEfectivoTotal / (fechasUnicas.length * HORAS_LABORALES_DIA)) * 100).toFixed(2)}%` : ''}\n
+Productividad diaria promedio: ${accionesPorDia.toFixed(2)}
+${mostrarInfoDetallada ? `\Acciones proyectadas: ${(5 * fechasUnicas.length)}
+Acciones realizadas: ${(totalNormales + totalSubregistros)}
+Porcentaje de acciones realizadas: ${(((totalNormales + totalSubregistros)/(5 * fechasUnicas.length))*100).toFixed(2)}%` : ''}
+${mostrarInfoDetallada ? `\nTiempo promedio por tipo de inspección:
+Normales: ${Math.floor(tiempoPromedioNormales)} horas y ${Math.round((tiempoPromedioNormales % 1) * 60)} minutos
+Visitas: ${Math.floor(tiempoPromedioVisitas)} horas y ${Math.round((tiempoPromedioVisitas % 1) * 60)} minutos
+Sub-Registros: ${Math.floor(tiempoPromedioSubregistros)} horas y ${Math.round((tiempoPromedioSubregistros % 1) * 60)} minutos` : ''}
+${mostrarInfoDetallada ? `\nPromedio lapso mas largo: ${promedioLapsoMasLargoFormateado}` : ''}`;
+    outputDiv.innerText = resumenHTML;
+
+    if (nombreTecnico !== "Todos los técnicos") {
+        mostrarHorasPorDia(datosResumen);
+    } else {
+        horasPorDiaDiv.innerHTML = "";
+    }
+
+    generarGrafico(datosResumen);
+}
+function mostrarHorasPorDia(datosResumen) {
+    horasPorDiaDiv.innerHTML = "";
+    const fechasUnicas = [...new Set(datosResumen.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0]))].sort();
+    let tablaHTML = `<table class="tabla-horas"><thead><tr><th>Fecha</th><th>Día</th><th>Hora Inicio</th><th>Comuna Inicio</th><th>Hora Fin</th><th>Comuna Fin</th><th>% Día</th><th>Normales</th><th>Visitas</th><th>Sub-Registros</th><th>Efectividad</th><th>Lapso más largo</th><th>Inicio Lapso</th><th>Fin Lapso</th></tr></thead><tbody>`;
+
+    fechasUnicas.forEach(fecha => {
+        const trabajosDelDia = datosResumen.filter(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[0] === fecha);
+        let horasInicio = trabajosDelDia.map(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[1]).filter(hora => hora !== undefined && hora !== null).sort();
+        let horasFin = [];
+        trabajosDelDia.forEach(trabajo => {
+            const horaFin = trabajo['Fecha y hora realizadas (Finalizado)'] ? trabajo['Fecha y hora realizadas (Finalizado)'].split(' ')[1] : null;
+            horasFin.push(horaFin);
+        });
+        horasFin.sort();
+
+        let clienteInicio = trabajosDelDia.find(item => item['Fecha y hora realizadas (Iniciado)'].split(' ')[1] === horasInicio[0])['Mi identificación de cliente'];
+        let clienteFin = trabajosDelDia.find(item => item['Fecha y hora realizadas (Finalizado)'].split(' ')[1] === horasFin[horasFin.length - 1])['Mi identificación de cliente'];
+
+        let comunaInicio = obtenerComuna(clienteInicio);
+        let comunaFin = obtenerComuna(clienteFin);
+
+        let duracionDia = 0;
+        let normalesDia = 0;
+        let visitasDia = 0;
+        let subregistrosDia = 0;
+        let tiempoEfectivoHoras = 0; // Añadido para calcular la efectividad diaria, aunque duracionDia ya existe para porcentajeDia
+
+        let lapsoMasLargoMinutos = 0;
+        let inicioLapso = null;
+        let finLapso = null;
+
+        // --- Bloque de cálculo de lapsos ADAPTADO de mostrarResumenTrifasico ---
+        if (horasFin.length > 0 && horasInicio.length > 0 && horasFin.length === horasInicio.length) {
+            for (let i = 0; i < horasFin.length - 1; i++) {
+                const horaFinActual = horasFin[i];
+                const horaInicioSiguiente = horasInicio[i + 1];
+
+                if (!horaFinActual || !horaInicioSiguiente) continue;
+
+                const minutosFin = convertirHoraAMinutos(horaFinActual); // Asume que convertirHoraAMinutos está definida
+                const minutosInicioSiguiente = convertirHoraAMinutos(horaInicioSiguiente); // Asume que convertirHoraAMinutos está definida
+                const lapso = minutosInicioSiguiente - minutosFin;
+
+                if (lapso > lapsoMasLargoMinutos) {
+                    lapsoMasLargoMinutos = lapso;
+                    inicioLapso = horaFinActual;
+                    finLapso = horaInicioSiguiente;
+                }
+            }
+        }
+        // --- Fin del bloque adaptado ---
+
+
+        const lapsoMasLargoHoras = Math.floor(lapsoMasLargoMinutos / 60);
+        const lapsoMasLargoMinutosRestantes = lapsoMasLargoMinutos % 60;
+        const lapsoMasLargo = `${lapsoMasLargoHoras} horas y ${lapsoMasLargoMinutosRestantes} minutos`;
+
+        trabajosDelDia.forEach(item => {
+            const [horas, minutos, segundos] = (item['Duración finalizada'] || "00:00:00").split(':').map(Number);
+            duracionDia += horas + minutos / 60 + segundos / 3600;
+
+            const estadoInspeccion = item['Inspeccion 1F>Estado Inspeccion'] || "Visitas";
+            if (estadoInspeccion === "Normal") normalesDia++;
+            else if (estadoInspeccion === "Visitas") visitasDia++;
+            else if (estadoInspeccion === "Sub-Registro") subregistrosDia++;
+
+             // Calcular tiempo efectivo por inspección para la efectividad diaria
+            const horaInicio = item['Fecha y hora realizadas (Iniciado)'].split(' ')[1];
+            const horaFin = item['Fecha y hora realizadas (Finalizado)']?.split(' ')[1];
+            if (horaInicio && horaFin) {
+                const minutosInicio = convertirHoraAMinutos(horaInicio);
+                const minutosFin = convertirHoraAMinutos(horaFin);
+                const duracionMinutos = minutosFin - minutosInicio;
+                tiempoEfectivoHoras += duracionMinutos / 60;
+            }
+
+        });
+
+        const porcentajeDia = (duracionDia / 8.5) * 100;
+
+        moment.locale('es');
+        const fechaMoment = moment(fecha, 'YYYY-MM-DD'); // Ajustar el formato si es necesario
+        const diaSemana = fechaMoment.format('dddd');
+
+        // Calcular la efectividad diaria -  Reutilizando tiempoEfectivoHoras calculado en trabajosDelDia.forEach (Correcto ahora)
+        const efectividadDiaCalculada = (normalesDia + subregistrosDia) > 0 ? (subregistrosDia / (normalesDia + subregistrosDia)) * 100 : 0;
+        const efectividadDia = efectividadDiaCalculada.toFixed(2) + "%";
+
+
+        tablaHTML += `<tr><td>${fecha}</td><td>${diaSemana}</td><td>${horasInicio.length > 0 ? horasInicio[0] : "Sin datos"}</td><td>${comunaInicio}</td><td>${horasFin.length > 0 ? horasFin[horasFin.length - 1] : "Sin datos"}</td><td>${comunaFin}</td><td>${porcentajeDia.toFixed(2)}%</td><td>${normalesDia}</td><td>${visitasDia}</td><td>${subregistrosDia}</td><td>${efectividadDia}</td><td>${lapsoMasLargo}</td><td>${inicioLapso || 'Sin lapso'}</td><td>${finLapso || 'Sin lapso'}</td></tr>`;
+    });
+    tablaHTML += "</tbody></table>";
+    horasPorDiaDiv.innerHTML = tablaHTML;
+}
+
+function convertirHoraAMinutos(hora) {
+    if (!hora) return 0;
+    const [h, m] = hora.split(':').map(Number);
+    return h * 60 + m;
+}
+        function obtenerComuna(idCliente) {
+            if (!df_clientes || !idCliente) return "No encontrada";
+            const clienteEncontrado = df_clientes.find(cliente => cliente['INTERLOCUTOR COMERCIAL'] === idCliente);
+            return clienteEncontrado ? clienteEncontrado['COMUNA'] : "No encontrada";
+        }
+
+        function convertirHoraAMinutos(hora) {
+            if (!hora) return 0;
+            const [h, m] = hora.split(':').map(Number);
+            return h * 60 + m;
+        }
+
+    </script>
+</body>
+</html>
